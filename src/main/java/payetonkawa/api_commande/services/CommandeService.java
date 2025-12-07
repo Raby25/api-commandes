@@ -6,8 +6,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.server.ResponseStatusException;
 
 import payetonkawa.api_commande.dto.AdresseDto;
@@ -257,9 +260,59 @@ public class CommandeService {
                 .toList();
     }
 
-    public Commande get(Long id) {
-        return repository.findById(id)
+    public CommandeDto getCommandeById(Long id) {
+        Commande c = repository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Commande introuvable avec l'ID: " + id));
+
+        return mapToDto(c);
+    }
+
+    @Transactional
+    public CommandeDto updateCommandeLignes(Long id, List<LigneCommandeDto> lignesDto) {
+        Commande existing = repository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Commande introuvable avec l'ID: " + id));
+
+        Map<Long, LigneCommande> existingLinesMap = existing.getLignes().stream()
+                .collect(Collectors.toMap(LigneCommande::getId, l -> l));
+
+        List<LigneCommande> finalLines = new ArrayList<>();
+
+        for (LigneCommandeDto ligneDto : lignesDto) {
+            if (ligneDto.getId() != null && existingLinesMap.containsKey(ligneDto.getId())) {
+                LigneCommande oldLine = existingLinesMap.get(ligneDto.getId());
+                oldLine.setQuantite(ligneDto.getQuantite());
+                oldLine.setPrixUnitaire(ligneDto.getPrixUnitaire());
+                oldLine.setProduitId(ligneDto.getProduitId());
+                oldLine.setLibelleProduit(ligneDto.getLibelleProduit());
+                oldLine.calculerMontant();
+                finalLines.add(oldLine);
+            } else {
+                LigneCommande newLine = new LigneCommande();
+                newLine.setCommande(existing);
+                newLine.setProduitId(ligneDto.getProduitId());
+                newLine.setLibelleProduit(ligneDto.getLibelleProduit());
+                newLine.setQuantite(ligneDto.getQuantite());
+                newLine.setPrixUnitaire(ligneDto.getPrixUnitaire());
+                newLine.calculerMontant();
+                finalLines.add(newLine);
+            }
+        }
+
+        existing.getLignes().clear();
+        existing.getLignes().addAll(finalLines);
+        existing.recalculerMontantTotal();
+
+        Commande updated = repository.save(existing);
+        CommandeDto dto = mapToDto(updated);
+
+        // --- Envoi message RabbitMQ ---
+        try {
+            rabbitTemplate.convertAndSend(exchange, "commande.updated", dto);
+        } catch (Exception e) {
+            log.error("Erreur lors de l'envoi du message RabbitMQ (update lignes)", e);
+        }
+
+        return dto;
     }
 
     // ========== MÉTHODES PRIVÉES ==========
@@ -334,8 +387,7 @@ public class CommandeService {
                         ligne.getLibelleProduit(),
                         ligne.getQuantite(),
                         ligne.getPrixUnitaire(),
-                        ligne.getMontant()
-                ))
+                        ligne.getMontant()))
                 .collect(Collectors.toList());
     }
 

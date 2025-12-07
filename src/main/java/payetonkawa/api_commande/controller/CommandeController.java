@@ -19,7 +19,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import payetonkawa.api_commande.dto.CommandeDto;
 import payetonkawa.api_commande.dto.LigneCommandeDto;
-import payetonkawa.api_commande.model.Commande;
 import payetonkawa.api_commande.services.CommandeService;
 
 @RestController
@@ -44,9 +43,10 @@ public class CommandeController {
         return service.all();
     }
 
+    // --- GET /commandes/{id}
     @GetMapping("/{id}")
-    public Commande get(@PathVariable Long id) {
-        return service.get(id);
+    public ResponseEntity<CommandeDto> getCommande(@PathVariable Long id) {
+        return ResponseEntity.ok(service.getCommandeById(id));
     }
 
     @PutMapping("/{id}")
@@ -76,13 +76,22 @@ public class CommandeController {
             @PathVariable Long clientId,
             @PathVariable Long commandeId) {
         try {
-            List<LigneCommandeDto> products = 
-                    service.getProductsByClientIdAndCommandeId(clientId, commandeId);
+            List<LigneCommandeDto> products = service.getProductsByClientIdAndCommandeId(clientId, commandeId);
             return ResponseEntity.ok(products);
         } catch (ResponseStatusException e) {
             return ResponseEntity.status(e.getStatusCode()).body(null);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
         }
+    }
+
+    // --- PUT /commandes/{id}/lines
+    @PutMapping("/{id}/lines")
+    public ResponseEntity<CommandeDto> updateCommandeLignes(
+            @PathVariable Long id,
+            @RequestBody List<LigneCommandeDto> lignes) {
+
+        CommandeDto updated = service.updateCommandeLignes(id, lignes);
+        return ResponseEntity.ok(updated);
     }
 }
