@@ -14,6 +14,7 @@ import java.util.List;
 @AllArgsConstructor
 public class CommandeDto {
 
+    private Long id;
     private String numCommande;
     private LocalDateTime dateCreation;
     private Long idClient;

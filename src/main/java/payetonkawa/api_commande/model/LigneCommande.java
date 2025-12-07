@@ -2,6 +2,7 @@ package payetonkawa.api_commande.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
 
@@ -9,6 +10,7 @@ import java.math.BigDecimal;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@Slf4j
 public class LigneCommande {
 
     @Id
@@ -42,8 +44,17 @@ public class LigneCommande {
     }
 
     public void calculerMontant() {
-        if (prixUnitaire != null && quantite != null) {
-            montant = prixUnitaire.multiply(BigDecimal.valueOf(quantite));
+        try {
+            if (prixUnitaire != null && quantite != null && quantite > 0) {
+                montant = prixUnitaire.multiply(BigDecimal.valueOf(quantite));
+            } else {
+                log.warn("Impossible de calculer le montant: prixUnitaire={}, quantite={}", prixUnitaire, quantite);
+                montant = BigDecimal.ZERO;
+            }
+        } catch (Exception e) {
+            log.error("Erreur lors du calcul du montant", e);
+            montant = BigDecimal.ZERO;
         }
+
     }
 }

@@ -41,6 +41,7 @@ public class Commande {
     private StatutCommande statut = StatutCommande.EN_ATTENTE;
 
     // --------- LIGNES ----------
+
     @OneToMany(mappedBy = "commande", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<LigneCommande> lignes = new ArrayList<>();
 
@@ -50,6 +51,7 @@ public class Commande {
     // --- Ajouter une ligne ---
     public void ajouterLigne(LigneCommande ligne) {
         ligne.setCommande(this);
+        ligne.calculerMontant();
         lignes.add(ligne);
         recalculerMontantTotal();
     }
@@ -64,8 +66,10 @@ public class Commande {
     // --- Recalcul du montant total ---
     public void recalculerMontantTotal() {
         this.montantTotal = lignes.stream()
+                .peek(LigneCommande::calculerMontant) // 🔥 recalcul chaque ligne
                 .map(LigneCommande::getMontant)
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
+
 }
