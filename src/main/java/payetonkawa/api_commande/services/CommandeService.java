@@ -5,8 +5,10 @@ import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import payetonkawa.api_commande.dto.AdresseDto;
 import payetonkawa.api_commande.dto.CommandeDto;
@@ -308,6 +310,33 @@ public class CommandeService {
         dto.setLignes(lignesDto);
         dto.setMontantTotal(c.getMontantTotal());
         return dto;
+    }
+
+    public List<CommandeDto> getCommandesByClientId(Long clientId) {
+        List<Commande> commandes = repository.findByIdClient(clientId);
+        return commandes.stream()
+                .map(this::mapToDto)
+                .collect(Collectors.toList());
+    }
+
+    public List<LigneCommandeDto> getProductsByClientIdAndCommandeId(Long clientId, Long commandeId) {
+        Commande commande = repository.findById(commandeId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Commande introuvable"));
+
+        if (!commande.getIdClient().equals(clientId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Cette commande n'appartient pas au client");
+        }
+
+        return commande.getLignes().stream()
+                .map(ligne -> new LigneCommandeDto(
+                        ligne.getId(),
+                        ligne.getProduitId(),
+                        ligne.getLibelleProduit(),
+                        ligne.getQuantite(),
+                        ligne.getPrixUnitaire(),
+                        ligne.getMontant()
+                ))
+                .collect(Collectors.toList());
     }
 
     private Adresse findOrCreateAdresse(Adresse a) {

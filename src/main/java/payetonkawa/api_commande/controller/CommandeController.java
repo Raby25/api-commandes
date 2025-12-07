@@ -12,13 +12,14 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import payetonkawa.api_commande.dto.CommandeDto;
+import payetonkawa.api_commande.dto.LigneCommandeDto;
 import payetonkawa.api_commande.model.Commande;
-import payetonkawa.api_commande.model.LigneCommande;
 import payetonkawa.api_commande.services.CommandeService;
 
 @RestController
@@ -68,5 +69,20 @@ public class CommandeController {
     @DeleteMapping("/{id}")
     public void delete(@PathVariable Long id) {
         service.delete(id);
+    }
+
+    @GetMapping("/{clientId}/commandes/{commandeId}/products")
+    public ResponseEntity<List<LigneCommandeDto>> getProductsFromCommande(
+            @PathVariable Long clientId,
+            @PathVariable Long commandeId) {
+        try {
+            List<LigneCommandeDto> products = 
+                    service.getProductsByClientIdAndCommandeId(clientId, commandeId);
+            return ResponseEntity.ok(products);
+        } catch (ResponseStatusException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(null);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
+        }
     }
 }
