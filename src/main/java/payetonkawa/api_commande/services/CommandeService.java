@@ -130,85 +130,106 @@ public class CommandeService {
     }
 
     @Transactional
-    public CommandeDto update(Long id, Commande c) {
+    public CommandeDto update(Long id, CommandeDto dto) {
+        log.info("Tentative de mise à jour de la commande ID {} avec DTO: {}", id, dto);
+
+        // Récupérer la commande existante
         Commande existing = repository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Commande introuvable avec l'ID: " + id));
 
-        existing.setNumCommande(c.getNumCommande());
-        existing.setIdClient(c.getIdClient());
-        existing.setStatut(c.getStatut());
+        // ===== CHAMPS SIMPLES =====
+        if (dto.getNumCommande() != null && !dto.getNumCommande().isEmpty()) {
+            existing.setNumCommande(dto.getNumCommande());
+        }
+        existing.setIdClient(dto.getIdClient());
+        existing.setStatut(dto.getStatut() != null ? dto.getStatut() : existing.getStatut());
 
-        // --- Gestion de l'adresse de livraison
-
-        if (c.getAdresseLivraison() != null) {
-            Adresse updatedLivraison = findOrCreateAdresse(c.getAdresseLivraison());
+        // ===== ADRESSE DE LIVRAISON =====
+        if (dto.getAdresseLivraison() != null) {
+            Adresse updatedLivraison = findOrCreateAdresse(mapDtoToAdresse(dto.getAdresseLivraison()));
             existing.setAdresseLivraison(updatedLivraison);
         }
 
-        // --- Map des lignes existantes pour éviter les doublons ---
+        // ===== MAP DES LIGNES EXISTANTES =====
         Map<Long, LigneCommande> existingLinesMap = existing.getLignes().stream()
                 .collect(Collectors.toMap(LigneCommande::getId, l -> l));
 
         List<LigneCommande> finalLines = new ArrayList<>();
+        BigDecimal total = BigDecimal.ZERO;
 
-        for (LigneCommande newLine : c.getLignes()) {
-            // --- Vérification du stock via ProduitClient ---
-            if (newLine.getProduitId() != null) {
-                ProductDto produit = produitClient.getProduitById(newLine.getProduitId());
-                if (produit.getStock() < newLine.getQuantite()) {
-                    throw new RuntimeException("Stock insuffisant pour le produit : " + produit.getName());
-                }
-                // Mise à jour du stock
-                produitClient.updateStock(produit.getId(), produit.getStock() - newLine.getQuantite());
+        for (LigneCommandeDto ligneDto : dto.getLignes()) {
+
+            if (ligneDto.getProduitId() == null) {
+                throw new RuntimeException("produitId manquant dans une ligne");
+            }
+            if (ligneDto.getQuantite() == null || ligneDto.getQuantite() <= 0) {
+                throw new RuntimeException("Quantité invalide pour le produit ID: " + ligneDto.getProduitId());
             }
 
-            if (newLine.getId() != null && existingLinesMap.containsKey(newLine.getId())) {
-                // ===== MISE À JOUR =====
-                LigneCommande oldLine = existingLinesMap.get(newLine.getId());
-                oldLine.setQuantite(newLine.getQuantite());
-                oldLine.setPrixUnitaire(newLine.getPrixUnitaire());
-                oldLine.setProduitId(newLine.getProduitId());
+            // Récupération produit et vérification stock
+            ProductDto produit = produitClient.getProduitById(ligneDto.getProduitId());
+            if (produit.getStock() < ligneDto.getQuantite()) {
+                throw new RuntimeException("Stock insuffisant pour: " + produit.getName());
+            }
 
-                if (newLine.getProduitId() != null) {
-                    oldLine.setLibelleProduit(
-                            produitClient.getLibelleById(newLine.getProduitId()));
+            LigneCommande ligne;
+
+            if (ligneDto.getId() != null && existingLinesMap.containsKey(ligneDto.getId())) {
+                // ===== MISE À JOUR LIGNE EXISTANTE =====
+                ligne = existingLinesMap.get(ligneDto.getId());
+                ligne.setQuantite(ligneDto.getQuantite());
+                ligne.setProduitId(ligneDto.getProduitId());
+
+                if (ligneDto.getPrixUnitaire() != null) {
+                    ligne.setPrixUnitaire(ligneDto.getPrixUnitaire());
+                } else {
+                    ligne.setPrixUnitaire(BigDecimal.valueOf(produit.getPrice()));
                 }
 
-                oldLine.calculerMontant();
-                finalLines.add(oldLine);
+                ligne.setLibelleProduit(produit.getName());
 
             } else {
-                // ===== AJOUT =====
-                newLine.setId(null);
-                newLine.setCommande(existing);
-
-                if (newLine.getProduitId() != null) {
-                    newLine.setLibelleProduit(
-                            produitClient.getLibelleById(newLine.getProduitId()));
-                }
-
-                newLine.calculerMontant();
-                finalLines.add(newLine);
+                // ===== NOUVELLE LIGNE =====
+                ligne = new LigneCommande();
+                ligne.setCommande(existing);
+                ligne.setProduitId(produit.getId());
+                ligne.setLibelleProduit(produit.getName());
+                ligne.setQuantite(ligneDto.getQuantite());
+                ligne.setPrixUnitaire(BigDecimal.valueOf(produit.getPrice()));
             }
+
+            // Lier ligne à la commande et calcul montant
+            ligne.setCommande(existing);
+            ligne.calculerMontant();
+            total = total.add(ligne.getMontant());
+
+            // Mettre à jour le stock
+            produitClient.updateStock(produit.getId(), produit.getStock() - ligneDto.getQuantite());
+
+            finalLines.add(ligne);
         }
 
-        // ===== SUPPRESSION des lignes retirées du JSON =====
+        // ===== REMPLACER LES LIGNES =====
         existing.getLignes().clear();
         existing.getLignes().addAll(finalLines);
 
-        existing.recalculerMontantTotal();
+        // ===== CALCUL MONTANT TOTAL =====
+        existing.setMontantTotal(total);
 
-        Commande updated = repository.save(existing);
+        // ===== SAUVEGARDE =====
+        Commande saved = repository.save(existing);
+        CommandeDto savedDto = mapToDto(saved);
+        log.info("Commande mise à jour DTO: {}", savedDto);
 
-        CommandeDto dto = mapToDto(updated);
-
+        // ===== ENVOI RABBITMQ =====
         try {
-            rabbitTemplate.convertAndSend(exchange, "commande.updated", dto);
+            rabbitTemplate.convertAndSend(exchange, "commande.updated", savedDto);
+            log.info("Message RabbitMQ envoyé pour la commande {}", saved.getId());
         } catch (Exception e) {
             log.error("Erreur lors de l'envoi du message RabbitMQ (update)", e);
         }
 
-        return dto;
+        return savedDto;
     }
 
     @Transactional
@@ -277,7 +298,7 @@ public class CommandeService {
         dto.setStatut(c.getStatut());
 
         List<LigneCommandeDto> lignesDto = c.getLignes().stream()
-                .map(ligne -> new LigneCommandeDto(
+                .map(ligne -> new LigneCommandeDto(ligne.getId(),
                         ligne.getProduitId(),
                         ligne.getLibelleProduit(),
                         ligne.getQuantite(),

@@ -11,6 +11,7 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 public class LigneCommandeDto {
 
+    private Long id;
     private Long produitId;
     private String libelleProduit;
     private Integer quantite;
