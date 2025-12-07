@@ -4,7 +4,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import payetonkawa.api_commande.dto.AdresseDto;
 import payetonkawa.api_commande.dto.CommandeDto;
@@ -31,37 +33,40 @@ public class CommandeService {
     private final RabbitTemplate rabbitTemplate;
     private final ProduitClient produitClient;
 
-    private final String exchange = "commandes.exchange";
+    @Value("${rabbitmq.commandes.exchange}")
+    private String exchange;
 
+    @Transactional
     public CommandeDto create(CommandeDto dto) {
         log.info("Tentative de création de commande DTO: {}", dto);
 
-        // VALIDATION DE BASE
-        if (dto.getIdClient() == null) {
-            throw new RuntimeException("idClient est obligatoire");
-        }
+        // ===== VALIDATIONS DE BASE =====
+        validateCommandeDto(dto);
 
-        if (dto.getLignes() == null || dto.getLignes().isEmpty()) {
-            throw new RuntimeException("La commande doit contenir au moins une ligne");
-        }
-
-        // ----- CREATION ENTITE COMMANDE -----
+        // ===== CRÉATION ENTITÉ COMMANDE =====
         Commande c = new Commande();
-        c.setNumCommande(dto.getNumCommande());
+
+        // Générer numéro de commande si absent
+        if (dto.getNumCommande() == null || dto.getNumCommande().isEmpty()) {
+            c.setNumCommande(generateNumCommande());
+        } else {
+            c.setNumCommande(dto.getNumCommande());
+        }
+
         c.setDateCreation(dto.getDateCreation() != null ? dto.getDateCreation() : LocalDateTime.now());
         c.setIdClient(dto.getIdClient());
-
-        // Vérifier statut
         c.setStatut(dto.getStatut() != null ? dto.getStatut() : StatutCommande.EN_ATTENTE);
 
-        // ----- ADRESSES -----
-        Adresse adresseFacturation = findOrCreateAdresse(mapDtoToAdresse(dto.getAdresseFacturation()));
-        Adresse adresseLivraison = findOrCreateAdresse(mapDtoToAdresse(dto.getAdresseLivraison()));
+        // ===== ADRESSES =====
 
-        c.setAdresseFacturation(adresseFacturation);
+        if (dto.getAdresseLivraison() == null) {
+            throw new RuntimeException("L'adresse de livraison est obligatoire");
+        }
+
+        Adresse adresseLivraison = findOrCreateAdresse(mapDtoToAdresse(dto.getAdresseLivraison()));
         c.setAdresseLivraison(adresseLivraison);
 
-        // ----- TRAITEMENT LIGNES -----
+        // ===== TRAITEMENT LIGNES =====
         BigDecimal total = BigDecimal.ZERO;
 
         for (LigneCommandeDto ligneDto : dto.getLignes()) {
@@ -76,20 +81,18 @@ public class CommandeService {
 
             // Récupération produit dans microservice produit
             ProductDto produit = produitClient.getProduitById(ligneDto.getProduitId());
-            if (produit == null) {
-                throw new RuntimeException("Produit introuvable ID: " + ligneDto.getProduitId());
-            }
 
             // Vérification stock
             if (produit.getStock() < ligneDto.getQuantite()) {
-                throw new RuntimeException("Stock insuffisant pour: " + produit.getLibelle());
+                throw new RuntimeException("Stock insuffisant pour: " + produit.getName() +
+                        " (disponible: " + produit.getStock() + ", demandé: " + ligneDto.getQuantite() + ")");
             }
 
             // Création ligne commande
             LigneCommande ligne = new LigneCommande();
             ligne.setCommande(c);
             ligne.setProduitId(produit.getId());
-            ligne.setLibelleProduit(produit.getLibelle());
+            ligne.setLibelleProduit(produit.getName()); // API utilise "name" pas "libelle"
             ligne.setQuantite(ligneDto.getQuantite());
             ligne.setPrixUnitaire(BigDecimal.valueOf(produit.getPrice()));
 
@@ -106,7 +109,7 @@ public class CommandeService {
         // Montant total
         c.setMontantTotal(total);
 
-        // ----- SAUVEGARDE -----
+        // ===== SAUVEGARDE =====
         Commande saved = repository.save(c);
         log.info("Commande enregistrée ID {}", saved.getId());
 
@@ -114,25 +117,28 @@ public class CommandeService {
         CommandeDto savedDto = mapToDto(saved);
         log.info("Commande saved DTO: {}", savedDto);
 
-        // ----- Envoi RabbitMQ -----
-        rabbitTemplate.convertAndSend(exchange, "commande.created", savedDto);
+        // ===== Envoi RabbitMQ =====
+        try {
+            rabbitTemplate.convertAndSend(exchange, "commande.created", savedDto);
+            log.info("Message RabbitMQ envoyé pour la commande {}", saved.getId());
+        } catch (Exception e) {
+            log.error("Erreur lors de l'envoi du message RabbitMQ", e);
+            // On ne fail pas la commande si RabbitMQ échoue
+        }
 
         return savedDto;
     }
 
+    @Transactional
     public CommandeDto update(Long id, Commande c) {
         Commande existing = repository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Commande not found"));
+                .orElseThrow(() -> new RuntimeException("Commande introuvable avec l'ID: " + id));
 
         existing.setNumCommande(c.getNumCommande());
         existing.setIdClient(c.getIdClient());
-
         existing.setStatut(c.getStatut());
-        // --- Gestion des adresses
-        if (c.getAdresseFacturation() != null) {
-            Adresse updatedFacturation = findOrCreateAdresse(c.getAdresseFacturation());
-            existing.setAdresseFacturation(updatedFacturation);
-        }
+
+        // --- Gestion de l'adresse de livraison
 
         if (c.getAdresseLivraison() != null) {
             Adresse updatedLivraison = findOrCreateAdresse(c.getAdresseLivraison());
@@ -150,15 +156,14 @@ public class CommandeService {
             if (newLine.getProduitId() != null) {
                 ProductDto produit = produitClient.getProduitById(newLine.getProduitId());
                 if (produit.getStock() < newLine.getQuantite()) {
-                    throw new RuntimeException("Stock insuffisant pour le produit : " + produit.getLibelle());
+                    throw new RuntimeException("Stock insuffisant pour le produit : " + produit.getName());
                 }
                 // Mise à jour du stock
                 produitClient.updateStock(produit.getId(), produit.getStock() - newLine.getQuantite());
             }
 
             if (newLine.getId() != null && existingLinesMap.containsKey(newLine.getId())) {
-
-                // ========== MISE À JOUR ==========
+                // ===== MISE À JOUR =====
                 LigneCommande oldLine = existingLinesMap.get(newLine.getId());
                 oldLine.setQuantite(newLine.getQuantite());
                 oldLine.setPrixUnitaire(newLine.getPrixUnitaire());
@@ -173,8 +178,7 @@ public class CommandeService {
                 finalLines.add(oldLine);
 
             } else {
-
-                // ========== AJOUT ==========
+                // ===== AJOUT =====
                 newLine.setId(null);
                 newLine.setCommande(existing);
 
@@ -188,7 +192,7 @@ public class CommandeService {
             }
         }
 
-        // ========== SUPPRESSION des lignes retirées du JSON ==========
+        // ===== SUPPRESSION des lignes retirées du JSON =====
         existing.getLignes().clear();
         existing.getLignes().addAll(finalLines);
 
@@ -198,35 +202,59 @@ public class CommandeService {
 
         CommandeDto dto = mapToDto(updated);
 
-        rabbitTemplate.convertAndSend(exchange, "commande.updated", dto,
-                message -> message);
+        try {
+            rabbitTemplate.convertAndSend(exchange, "commande.updated", dto);
+        } catch (Exception e) {
+            log.error("Erreur lors de l'envoi du message RabbitMQ (update)", e);
+        }
 
         return dto;
     }
 
+    @Transactional
     public void delete(Long id) {
         Commande existing = repository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Commande not found"));
+                .orElseThrow(() -> new RuntimeException("Commande introuvable avec l'ID: " + id));
+
         repository.deleteById(id);
 
         CommandeDto dto = mapToDto(existing);
-        rabbitTemplate.convertAndSend(exchange, "commande.deleted", dto,
-                message -> message);
+
+        try {
+            rabbitTemplate.convertAndSend(exchange, "commande.deleted", dto);
+        } catch (Exception e) {
+            log.error("Erreur lors de l'envoi du message RabbitMQ (delete)", e);
+        }
     }
 
     public List<CommandeDto> all() {
         return repository.findAll()
                 .stream()
-                .map(this::mapToDto) // map chaque Commande en CommandeDto
+                .map(this::mapToDto)
                 .toList();
     }
 
     public Commande get(Long id) {
         return repository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Commande not found"));
+                .orElseThrow(() -> new RuntimeException("Commande introuvable avec l'ID: " + id));
     }
 
-    // --- Méthode privée de mapping d'adresse ---
+    // ========== MÉTHODES PRIVÉES ==========
+
+    private void validateCommandeDto(CommandeDto dto) {
+        if (dto.getIdClient() == null) {
+            throw new RuntimeException("idClient est obligatoire");
+        }
+
+        if (dto.getLignes() == null || dto.getLignes().isEmpty()) {
+            throw new RuntimeException("La commande doit contenir au moins une ligne");
+        }
+    }
+
+    private String generateNumCommande() {
+        return "CMD-" + System.currentTimeMillis();
+    }
+
     private AdresseDto mapAdresse(Adresse adresse) {
         if (adresse == null)
             return null;
@@ -239,18 +267,15 @@ public class CommandeService {
                 adresse.getPays());
     }
 
-    // --- Mapper Commande → CommandeDto ---
     private CommandeDto mapToDto(Commande c) {
         CommandeDto dto = new CommandeDto();
         dto.setId(c.getId());
         dto.setNumCommande(c.getNumCommande());
         dto.setDateCreation(c.getDateCreation());
         dto.setIdClient(c.getIdClient());
-
-        dto.setAdresseFacturation(mapAdresse(c.getAdresseFacturation()));
         dto.setAdresseLivraison(mapAdresse(c.getAdresseLivraison()));
         dto.setStatut(c.getStatut());
-        // --- Transformation des lignes ---
+
         List<LigneCommandeDto> lignesDto = c.getLignes().stream()
                 .map(ligne -> new LigneCommandeDto(
                         ligne.getProduitId(),
@@ -265,20 +290,23 @@ public class CommandeService {
     }
 
     private Adresse findOrCreateAdresse(Adresse a) {
-        if (a == null)
-            return null;
+        if (a == null) {
+            throw new RuntimeException("Adresse ne peut pas être null");
+        }
 
         return adresseRepository.findByNumeroRueAndRueAndVilleAndCodePostalAndPays(
                 a.getNumeroRue(),
                 a.getRue(),
                 a.getVille(),
                 a.getCodePostal(),
-                a.getPays()).orElseGet(() -> adresseRepository.save(a));
+                a.getPays())
+                .orElseGet(() -> adresseRepository.save(a));
     }
 
     private Adresse mapDtoToAdresse(AdresseDto dto) {
-        if (dto == null)
+        if (dto == null) {
             return null;
+        }
 
         Adresse a = new Adresse();
         a.setNumeroRue(dto.getNumeroRue());
@@ -288,5 +316,4 @@ public class CommandeService {
         a.setPays(dto.getPays());
         return a;
     }
-
 }

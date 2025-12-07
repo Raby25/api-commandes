@@ -26,11 +26,6 @@ public class Commande {
     @Column(nullable = false)
     private Long idClient;
 
-    // --------- ADRESSES ----------
-    @ManyToOne(cascade = CascadeType.ALL)
-    @JoinColumn(name = "adresse_facturation_id", nullable = false)
-    private Adresse adresseFacturation;
-
     @ManyToOne(cascade = CascadeType.ALL)
     @JoinColumn(name = "adresse_livraison_id", nullable = false)
     private Adresse adresseLivraison;
