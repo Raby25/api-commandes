@@ -1,9 +1,13 @@
 package payetonkawa.api_commande.controller;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -13,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.security.core.Authentication;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -38,12 +43,21 @@ public class CommandeController {
         return new ResponseEntity<>(createdCommande, HttpStatus.CREATED);
     }
 
+    @GetMapping("/debug/auth")
+    public ResponseEntity<?> debug(Authentication auth) {
+        return ResponseEntity.ok(Map.of(
+                "authorities", auth.getAuthorities().stream()
+                        .map(GrantedAuthority::getAuthority)
+                        .collect(Collectors.toList())));
+    }
+
     @GetMapping
+    @PreAuthorize("hasAuthority('COMMANDE_READ')")
     public List<CommandeDto> all() {
         return service.all();
     }
 
-    // --- GET /commandes/{id}
+    // GET /commandes/{id}
     @GetMapping("/{id}")
     public ResponseEntity<CommandeDto> getCommande(@PathVariable Long id) {
         return ResponseEntity.ok(service.getCommandeById(id));
@@ -85,7 +99,7 @@ public class CommandeController {
         }
     }
 
-    // --- PUT /commandes/{id}/lines
+    // PUT /commandes/{id}/lines
     @PutMapping("/{id}/lines")
     public ResponseEntity<CommandeDto> updateCommandeLignes(
             @PathVariable Long id,

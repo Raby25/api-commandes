@@ -48,9 +48,9 @@
 		</dependency>
 
 		<dependency>
-			<groupId>com.h2database</groupId>
-			<artifactId>h2</artifactId>
-			<scope>runtime</scope>
+    		<groupId>com.h2database</groupId>
+    		<artifactId>h2</artifactId>
+    		<scope>test</scope>
 		</dependency>
 		<dependency>
 			<groupId>org.postgresql</groupId>
@@ -92,6 +92,26 @@
     		<groupId>org.springframework.boot</groupId>
     		<artifactId>spring-boot-starter-amqp</artifactId>
 		</dependency>
+		<dependency>
+    		<groupId>org.springframework.boot</groupId>
+    		<artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+		</dependency>
+
+		<dependency>
+    		<groupId>org.springframework.boot</groupId>
+    		<artifactId>spring-boot-starter-oauth2-client</artifactId>
+		</dependency>
+
+		<dependency>
+    		<groupId>org.springframework.security</groupId>
+    		<artifactId>spring-security-oauth2-jose</artifactId>
+		</dependency>
+		<dependency>
+  			<groupId>org.springdoc</groupId>
+  			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+  			<version>2.5.0</version>
+		</dependency>
+
 	</dependencies>
 
 	<build>
@@ -120,6 +140,31 @@
 					</excludes>
 				</configuration>
 			</plugin>
+			<plugin>
+    			<groupId>org.jacoco</groupId>
+    			<artifactId>jacoco-maven-plugin</artifactId>
+    			<version>0.8.11</version>
+    			<executions>
+        			<execution>
+            			<goals>
+                			<goal>prepare-agent</goal>
+            			</goals>
+        			</execution>
+        			<execution>
+            			<id>report</id>
+            			<phase>test</phase>
+            			<goals>
+                			<goal>report</goal>
+            			</goals>
+        			</execution>
+    			</executions>	
+			</plugin>
+			<plugin>
+    			<groupId>org.sonarsource.scanner.maven</groupId>
+    			<artifactId>sonar-maven-plugin</artifactId>
+    			<version>4.0.0.4121</version>
+			</plugin>
+
 		</plugins>
 	</build>
 

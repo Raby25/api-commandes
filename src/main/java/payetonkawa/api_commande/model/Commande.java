@@ -30,12 +30,9 @@ public class Commande {
     @JoinColumn(name = "adresse_livraison_id", nullable = false)
     private Adresse adresseLivraison;
 
-    // --------- STATUT ----------
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private StatutCommande statut = StatutCommande.EN_ATTENTE;
-
-    // --------- LIGNES ----------
 
     @OneToMany(mappedBy = "commande", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<LigneCommande> lignes = new ArrayList<>();
@@ -43,7 +40,6 @@ public class Commande {
     @Column(nullable = false)
     private BigDecimal montantTotal = BigDecimal.ZERO;
 
-    // --- Ajouter une ligne ---
     public void ajouterLigne(LigneCommande ligne) {
         ligne.setCommande(this);
         ligne.calculerMontant();
@@ -51,17 +47,15 @@ public class Commande {
         recalculerMontantTotal();
     }
 
-    // --- Supprimer une ligne ---
     public void supprimerLigne(LigneCommande ligne) {
         lignes.remove(ligne);
         ligne.setCommande(null);
         recalculerMontantTotal();
     }
 
-    // --- Recalcul du montant total ---
     public void recalculerMontantTotal() {
         this.montantTotal = lignes.stream()
-                .peek(LigneCommande::calculerMontant) // 🔥 recalcul chaque ligne
+                .peek(LigneCommande::calculerMontant)
                 .map(LigneCommande::getMontant)
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);

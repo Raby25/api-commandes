@@ -6,11 +6,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.server.ResponseStatusException;
 
 import payetonkawa.api_commande.dto.AdresseDto;
@@ -45,10 +42,8 @@ public class CommandeService {
     public CommandeDto create(CommandeDto dto) {
         log.info("Tentative de création de commande DTO: {}", dto);
 
-        // ===== VALIDATIONS DE BASE =====
         validateCommandeDto(dto);
 
-        // ===== CRÉATION ENTITÉ COMMANDE =====
         Commande c = new Commande();
 
         // Générer numéro de commande si absent
@@ -62,8 +57,6 @@ public class CommandeService {
         c.setIdClient(dto.getIdClient());
         c.setStatut(dto.getStatut() != null ? dto.getStatut() : StatutCommande.EN_ATTENTE);
 
-        // ===== ADRESSES =====
-
         if (dto.getAdresseLivraison() == null) {
             throw new RuntimeException("L'adresse de livraison est obligatoire");
         }
@@ -71,7 +64,7 @@ public class CommandeService {
         Adresse adresseLivraison = findOrCreateAdresse(mapDtoToAdresse(dto.getAdresseLivraison()));
         c.setAdresseLivraison(adresseLivraison);
 
-        // ===== TRAITEMENT LIGNES =====
+        // lignes
         BigDecimal total = BigDecimal.ZERO;
 
         for (LigneCommandeDto ligneDto : dto.getLignes()) {
@@ -93,25 +86,19 @@ public class CommandeService {
                         " (disponible: " + produit.getStock() + ", demandé: " + ligneDto.getQuantite() + ")");
             }
 
-            // Création ligne commande
             LigneCommande ligne = new LigneCommande();
             ligne.setCommande(c);
             ligne.setProduitId(produit.getId());
-            ligne.setLibelleProduit(produit.getName()); // API utilise "name" pas "libelle"
+            ligne.setLibelleProduit(produit.getName());
             ligne.setQuantite(ligneDto.getQuantite());
             ligne.setPrixUnitaire(BigDecimal.valueOf(produit.getPrice()));
 
-            // Calcul du montant
             ligne.calculerMontant();
             total = total.add(ligne.getMontant());
-
-            // Mise à jour du stock
             produitClient.updateStock(produit.getId(), produit.getStock() - ligneDto.getQuantite());
 
             c.getLignes().add(ligne);
         }
-
-        // Montant total
         c.setMontantTotal(total);
 
         // ===== SAUVEGARDE =====
@@ -128,7 +115,7 @@ public class CommandeService {
             log.info("Message RabbitMQ envoyé pour la commande {}", saved.getId());
         } catch (Exception e) {
             log.error("Erreur lors de l'envoi du message RabbitMQ", e);
-            // On ne fail pas la commande si RabbitMQ échoue
+
         }
 
         return savedDto;
@@ -142,20 +129,17 @@ public class CommandeService {
         Commande existing = repository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Commande introuvable avec l'ID: " + id));
 
-        // ===== CHAMPS SIMPLES =====
         if (dto.getNumCommande() != null && !dto.getNumCommande().isEmpty()) {
             existing.setNumCommande(dto.getNumCommande());
         }
         existing.setIdClient(dto.getIdClient());
         existing.setStatut(dto.getStatut() != null ? dto.getStatut() : existing.getStatut());
 
-        // ===== ADRESSE DE LIVRAISON =====
         if (dto.getAdresseLivraison() != null) {
             Adresse updatedLivraison = findOrCreateAdresse(mapDtoToAdresse(dto.getAdresseLivraison()));
             existing.setAdresseLivraison(updatedLivraison);
         }
 
-        // ===== MAP DES LIGNES EXISTANTES =====
         Map<Long, LigneCommande> existingLinesMap = existing.getLignes().stream()
                 .collect(Collectors.toMap(LigneCommande::getId, l -> l));
 
@@ -180,7 +164,6 @@ public class CommandeService {
             LigneCommande ligne;
 
             if (ligneDto.getId() != null && existingLinesMap.containsKey(ligneDto.getId())) {
-                // ===== MISE À JOUR LIGNE EXISTANTE =====
                 ligne = existingLinesMap.get(ligneDto.getId());
                 ligne.setQuantite(ligneDto.getQuantite());
                 ligne.setProduitId(ligneDto.getProduitId());
@@ -194,7 +177,7 @@ public class CommandeService {
                 ligne.setLibelleProduit(produit.getName());
 
             } else {
-                // ===== NOUVELLE LIGNE =====
+                // NOUVELLE LIGNE
                 ligne = new LigneCommande();
                 ligne.setCommande(existing);
                 ligne.setProduitId(produit.getId());
@@ -214,19 +197,16 @@ public class CommandeService {
             finalLines.add(ligne);
         }
 
-        // ===== REMPLACER LES LIGNES =====
         existing.getLignes().clear();
         existing.getLignes().addAll(finalLines);
 
-        // ===== CALCUL MONTANT TOTAL =====
         existing.setMontantTotal(total);
 
-        // ===== SAUVEGARDE =====
         Commande saved = repository.save(existing);
         CommandeDto savedDto = mapToDto(saved);
         log.info("Commande mise à jour DTO: {}", savedDto);
 
-        // ===== ENVOI RABBITMQ =====
+        //ENVOI RABBITMQ
         try {
             rabbitTemplate.convertAndSend(exchange, "commande.updated", savedDto);
             log.info("Message RabbitMQ envoyé pour la commande {}", saved.getId());
@@ -314,8 +294,6 @@ public class CommandeService {
 
         return dto;
     }
-
-    // ========== MÉTHODES PRIVÉES ==========
 
     private void validateCommandeDto(CommandeDto dto) {
         if (dto.getIdClient() == null) {

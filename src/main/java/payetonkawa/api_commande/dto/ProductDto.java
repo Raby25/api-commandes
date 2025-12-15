@@ -18,7 +18,7 @@ public class ProductDto {
     private int stock;
     private Date createdAt;
 
-    // Méthode helper pour compatibilité avec le code existant
+    
     public String getLibelle() {
         return this.name;
     }

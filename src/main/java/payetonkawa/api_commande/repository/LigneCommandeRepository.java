@@ -9,6 +9,5 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public interface LigneCommandeRepository extends JpaRepository<LigneCommande, Long> {
-    // Exemples de méthodes personnalisées possibles :
     List<LigneCommande> findByCommandeId(Long commandeId);
 }
